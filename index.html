@@ -1913,7 +1913,10 @@ main {
 
   <!-- DASHBOARD -->
   <div id="dashboard-view" class="view">
-    <div class="page-title">Markt-Übersicht</div>
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem; gap:0.75rem">
+      <div class="page-title" style="margin-bottom:0">Markt-Übersicht</div>
+      <button class="btn btn-secondary btn-sm" id="toggle-resolved-btn" onclick="toggleResolvedMarkets()">Beendete anzeigen</button>
+    </div>
     <div id="market-list" class="markets-grid">
       <div class="empty-state">Lade Märkte... <span class="loading-spinner"></span></div>
     </div>
@@ -2154,6 +2157,7 @@ let currentProfile = null;
 let currentMarketId = null;
 let priceChart = null;
 let activateMarketId = null;
+let showResolvedMarkets = false;
 let resolveMarketId = null;
 let rejectMarketId = null;
 let editMarketId = null;
@@ -2353,8 +2357,9 @@ function setupMobileNav() {
 // DASHBOARD
 // ============================================================
 async function loadMarkets() {
+  const statusFilter = showResolvedMarkets ? ['active', 'resolved'] : ['active'];
   const [{ data: markets, error }, { data: holdings }] = await Promise.all([
-    sb.from('markets_overview').select('*').in('status', ['active', 'resolved']).order('created_at', { ascending: false }),
+    sb.from('markets_overview').select('*').in('status', statusFilter).order('activated_at', { ascending: false }),
     sb.from('holdings').select('market_id, yes_shares, no_shares, total_invested').eq('user_id', currentUser.id)
   ]);
 
@@ -2420,6 +2425,13 @@ async function loadMarkets() {
       ${hasPos ? `<div style="margin-top:0.55rem; display:flex; align-items:center; gap:0.35rem; font-family:var(--font-mono); font-size:0.68rem; color:${posDirColor}"><span style="width:5px;height:5px;border-radius:50%;background:${posDirColor};display:inline-block;box-shadow:0 0 5px ${posDirColor}"></span>Deine Position: ${posDir} · ${invested.toFixed(0)} ₡</div>` : ''}
     </div>`;
   }).join('');
+}
+
+function toggleResolvedMarkets() {
+  showResolvedMarkets = !showResolvedMarkets;
+  const btn = document.getElementById('toggle-resolved-btn');
+  if (btn) btn.textContent = showResolvedMarkets ? 'Beendete ausblenden' : 'Beendete anzeigen';
+  loadMarkets();
 }
 
 // ============================================================
