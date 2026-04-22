@@ -2358,21 +2358,25 @@ function setupMobileNav() {
 // ============================================================
 async function loadMarkets() {
   const statusFilter = showResolvedMarkets ? ['active', 'resolved'] : ['active'];
-  const [{ data: markets, error }, { data: holdings }] = await Promise.all([
+  const [{ data: markets, error }, { data: holdings }, { data: hiddenFlags }] = await Promise.all([
     sb.from('markets_overview').select('*').in('status', statusFilter).order('activated_at', { ascending: false }),
-    sb.from('holdings').select('market_id, yes_shares, no_shares, total_invested').eq('user_id', currentUser.id)
+    sb.from('holdings').select('market_id, yes_shares, no_shares, total_invested').eq('user_id', currentUser.id),
+    sb.from('markets').select('id, hidden').eq('hidden', true)
   ]);
+
+  const hiddenIds = new Set((hiddenFlags || []).map(m => m.id));
+  const visibleMarkets = (markets || []).filter(m => !hiddenIds.has(m.id));
 
   // Build a quick lookup: market_id → holding
   const holdingMap = {};
   (holdings || []).forEach(h => { holdingMap[h.market_id] = h; });
 
   const container = document.getElementById('market-list');
-  if (error || !markets?.length) {
+  if (error || !visibleMarkets.length) {
     container.innerHTML = `<div class="empty-state">Keine aktiven Märkte gefunden.<br><span class="text-dim">Admins können Märkte aktivieren.</span></div>`;
     return;
   }
-  container.innerHTML = markets.map(m => {
+  container.innerHTML = visibleMarkets.map(m => {
     const prob = m.prob_yes !== null ? m.prob_yes : null;
     const pctYes = prob !== null ? probToPercent(prob) : '?';
     const pctNo = prob !== null ? 100 - pctYes : '?';
@@ -3112,23 +3116,34 @@ async function loadAdminPanel() {
     rejSection.style.display = 'none';
   }
 
-  const { data: active } = await sb.from('markets_overview').select('*').eq('status', 'active');
+  const [{ data: active }, { data: activeHiddenFlags }] = await Promise.all([
+    sb.from('markets_overview').select('*').eq('status', 'active'),
+    sb.from('markets').select('id, hidden').eq('status', 'active')
+  ]);
+  const activeHiddenMap = {};
+  (activeHiddenFlags || []).forEach(m => { activeHiddenMap[m.id] = m.hidden; });
+
   const actEl = document.getElementById('admin-active-markets');
   if (!active?.length) {
     actEl.innerHTML = '<div class="empty-state">Keine aktiven Märkte</div>';
   } else {
-    actEl.innerHTML = active.map(m => `
-      <div class="card flex-between" style="flex-wrap:wrap; gap:1rem">
+    actEl.innerHTML = active.map(m => {
+      const isHidden = !!activeHiddenMap[m.id];
+      return `
+      <div class="card flex-between" style="flex-wrap:wrap; gap:1rem; ${isHidden ? 'opacity:0.55; border-color:rgba(168,143,66,0.25)' : ''}">
         <div>
-          <div style="font-family:var(--font-sans); font-weight:500; color:var(--text)">${escHtml(m.title)}</div>
+          <div style="font-family:var(--font-sans); font-weight:500; color:var(--text)">${escHtml(m.title)}${isHidden ? ' <span class="badge badge-resolved" style="font-size:0.6rem;vertical-align:middle;margin-left:0.3rem">versteckt</span>' : ''}</div>
           <div class="text-dim text-mono" style="font-size:0.7rem; margin-top:0.3rem">P(JA): ${m.prob_yes !== null ? Math.round(m.prob_yes*100) + '%' : '?'} · ${m.trade_count} Trades</div>
         </div>
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+          <button class="btn btn-secondary btn-sm" onclick="toggleMarketHidden('${m.id}', '${escHtml(m.title)}', ${isHidden})"
+            style="${isHidden ? 'border-color:var(--yellow);color:var(--yellow)' : 'border-color:var(--text-dim);color:var(--text-dim)'}"
+            title="${isHidden ? 'Markt wieder einblenden' : 'Markt vorübergehend verstecken'}">${isHidden ? '⊙ Einblenden' : '⊘ Verstecken'}</button>
           <button class="btn btn-danger btn-sm" onclick="openResolveModal('${m.id}', '${escHtml(m.title)}')">Auflösen</button>
           <button class="btn btn-secondary btn-sm" onclick="openVoidModal('${m.id}', '${escHtml(m.title)}')" style="border-color:var(--text-dim);color:var(--text-dim)" title="Wette annullieren – alle bekommen ihren Einsatz zurück">⊘ Void</button>
         </div>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
   }
 
   const { data: users } = await sb.from('profiles').select('*').order('balance', { ascending: false });
@@ -3173,6 +3188,13 @@ window.undoRejectMarket = async function(id, title) {
   const { error } = await sb.from('markets').update({ status: 'proposed' }).eq('id', id);
   if (error) return toast('Fehler: ' + error.message, 'error');
   toast(`"${title}" wieder auf Vorschlag gesetzt.`, 'success');
+  loadAdminPanel();
+};
+
+window.toggleMarketHidden = async function(id, title, currentlyHidden) {
+  const { error } = await sb.rpc('toggle_market_hidden', { p_market_id: id });
+  if (error) return toast('Fehler: ' + error.message, 'error');
+  toast(currentlyHidden ? `"${title}" wieder eingeblendet.` : `"${title}" versteckt.`, 'success');
   loadAdminPanel();
 };
 
