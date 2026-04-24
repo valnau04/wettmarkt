@@ -1597,6 +1597,80 @@ main {
   .portfolio-grid { grid-template-columns: 1fr; }
   .portfolio-summary { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ─── TRANSACTION HISTORY ─── */
+.tx-section-title {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 1rem;
+  margin-top: 2rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+.tx-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.tx-item {
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.6rem 0.85rem;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.tx-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.tx-dot-income     { background: var(--green); }
+.tx-dot-expense    { background: var(--red); }
+.tx-dot-adjustment { background: var(--accent); }
+.tx-meta { min-width: 0; }
+.tx-label {
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tx-sub {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  color: var(--text-dim);
+  margin-top: 0.12rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tx-amount {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  white-space: nowrap;
+  text-align: right;
+}
+.tx-load-more {
+  text-align: center;
+  padding: 0.55rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--accent);
+  cursor: pointer;
+  opacity: 0.75;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--bg2);
+}
+.tx-load-more:hover { opacity: 1; }
 </style>
 </head>
 <body>
@@ -1998,6 +2072,12 @@ main {
     <div id="portfolio-list" class="portfolio-grid">
       <div class="empty-state">Lade Portfolio... <span class="loading-spinner"></span></div>
     </div>
+    <div id="portfolio-tx-section">
+      <div class="tx-section-title">Transaktionshistorie</div>
+      <div id="portfolio-tx-list" class="tx-list">
+        <div class="empty-state">Lade... <span class="loading-spinner"></span></div>
+      </div>
+    </div>
   </div>
 
   <!-- ADMIN -->
@@ -2117,6 +2197,27 @@ main {
     <div style="display:flex; gap:0.75rem;">
       <button class="btn btn-sm" id="btn-void-confirm" style="flex:1;background:transparent;border:1px solid var(--text-dim);color:var(--text-mid)">Void bestätigen</button>
       <button class="btn btn-secondary btn-sm" id="btn-void-cancel" style="flex:1">Abbrechen</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADMIN GUTHABEN-ANPASSUNG MODAL -->
+<div id="adjust-balance-modal" class="modal-overlay hidden">
+  <div class="modal" style="max-width:420px">
+    <button class="modal-close" id="close-adjust-balance">✕</button>
+    <div class="modal-title">Guthaben anpassen</div>
+    <p class="text-dim text-mono" style="font-size:0.78rem; margin-bottom:1.25rem" id="adjust-balance-username"></p>
+    <div class="form-group">
+      <label>Betrag in ₡ (positiv = schenken, negativ = abziehen)</label>
+      <input type="number" id="adjust-balance-amount" placeholder="z.B. 100 oder -50" step="1">
+    </div>
+    <div class="form-group">
+      <label>Notiz (optional)</label>
+      <input type="text" id="adjust-balance-note" placeholder="z.B. Bonus für Teilnahme" maxlength="200">
+    </div>
+    <div style="display:flex; gap:0.75rem;">
+      <button class="btn btn-primary" id="btn-adjust-balance-confirm" style="flex:1">Bestätigen</button>
+      <button class="btn btn-secondary" id="btn-adjust-balance-cancel" style="flex:1">Abbrechen</button>
     </div>
   </div>
 </div>
@@ -2856,6 +2957,7 @@ async function loadPortfolio() {
   if (error || !holdings || holdings.length === 0) {
     listEl.innerHTML = '<div class="empty-state">Du hast noch keine Positionen.<br><span class="text-dim">Platziere deine erste Wette in einem Markt!</span></div>';
     summaryEl.innerHTML = '';
+    loadTransactionHistory();
     return;
   }
 
@@ -2867,6 +2969,7 @@ async function loadPortfolio() {
   if (activeHoldings.length === 0) {
     listEl.innerHTML = '<div class="empty-state">Keine aktiven Positionen.<br><span class="text-dim">Alle deine Shares wurden ausgezahlt.</span></div>';
     summaryEl.innerHTML = '';
+    loadTransactionHistory();
     return;
   }
 
@@ -2955,7 +3058,89 @@ async function loadPortfolio() {
   `;
 
   listEl.innerHTML = cards.join('') || '<div class="empty-state">Keine Positionen gefunden.</div>';
+  loadTransactionHistory();
 }
+
+// ============================================================
+// TRANSACTION HISTORY
+// ============================================================
+let _txOffset = 0;
+const _TX_PAGE = 30;
+
+async function loadTransactionHistory(reset = true) {
+  const listEl = document.getElementById('portfolio-tx-list');
+  if (!listEl) return;
+
+  if (reset) {
+    _txOffset = 0;
+    listEl.innerHTML = '<div class="empty-state">Lade... <span class="loading-spinner"></span></div>';
+  }
+
+  const { data: txs, error } = await sb.rpc('get_transaction_history', {
+    p_user_id: currentUser.id,
+    p_limit:   _TX_PAGE + 1,
+    p_offset:  _txOffset
+  });
+
+  if (error) {
+    listEl.innerHTML = '<div class="empty-state text-red">Fehler beim Laden der Transaktionen.</div>';
+    return;
+  }
+
+  if (!txs || txs.length === 0) {
+    if (reset) listEl.innerHTML = '<div class="empty-state">Noch keine Transaktionen.</div>';
+    return;
+  }
+
+  const hasMore = txs.length > _TX_PAGE;
+  const items = hasMore ? txs.slice(0, _TX_PAGE) : txs;
+
+  function fmtDate(iso) {
+    const d = new Date(iso);
+    return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' })
+      + ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  const rows = items.map(tx => {
+    const amt = parseFloat(tx.amount);
+    const isIncome = amt >= 0;
+    const dotClass = tx.tx_type === 'trade' ? 'tx-dot-expense'
+      : tx.tx_type === 'payout'      ? 'tx-dot-income'
+      : isIncome                     ? 'tx-dot-income'
+      :                                'tx-dot-expense';
+    const amtColor  = isIncome ? 'text-green' : 'text-red';
+    const amtPrefix = isIncome ? '+' : '−';
+    const label    = escHtml(tx.description);
+    const subParts = [];
+    if (tx.market_title) subParts.push(escHtml(tx.market_title));
+    subParts.push(fmtDate(tx.created_at));
+    return `<div class="tx-item">
+      <div class="tx-dot ${dotClass}"></div>
+      <div class="tx-meta">
+        <div class="tx-label">${label}</div>
+        <div class="tx-sub">${subParts.join(' · ')}</div>
+      </div>
+      <div class="tx-amount ${amtColor}">${amtPrefix}${formatCoins(Math.abs(amt))}</div>
+    </div>`;
+  }).join('');
+
+  if (reset) {
+    listEl.innerHTML = rows;
+  } else {
+    const btn = listEl.querySelector('.tx-load-more');
+    if (btn) btn.remove();
+    listEl.insertAdjacentHTML('beforeend', rows);
+  }
+
+  if (hasMore) {
+    listEl.insertAdjacentHTML('beforeend',
+      `<div class="tx-load-more" onclick="window._loadMoreTx()">Mehr laden...</div>`);
+  }
+
+  _txOffset += _TX_PAGE;
+}
+
+window._loadMoreTx = function() { loadTransactionHistory(false); };
 
 // ============================================================
 // LEADERBOARD
@@ -3166,6 +3351,7 @@ async function loadAdminPanel() {
                 <option value="admin" ${u.role==='admin'?'selected':''}>admin</option>
               </select>
               <button class="btn btn-secondary btn-sm" style="margin-left:0.4rem" onclick="setRole('${u.id}', this)">OK</button>
+              <button class="btn btn-secondary btn-sm" style="margin-left:0.4rem; color:var(--yellow)" onclick="openAdjustBalanceModal('${u.id}', '${escHtml(u.username)}')">₡</button>
             </td>
           </tr>
         `).join('')}
@@ -3183,6 +3369,40 @@ window.setRole = async function(uid, btn) {
   toast('Rolle aktualisiert.', 'success');
   loadAdminPanel();
 };
+
+let _adjustBalanceUserId = null;
+
+window.openAdjustBalanceModal = function(uid, username) {
+  _adjustBalanceUserId = uid;
+  document.getElementById('adjust-balance-username').textContent = username;
+  document.getElementById('adjust-balance-amount').value = '';
+  document.getElementById('adjust-balance-note').value = '';
+  document.getElementById('adjust-balance-modal').classList.remove('hidden');
+};
+
+document.getElementById('close-adjust-balance').addEventListener('click', () => {
+  document.getElementById('adjust-balance-modal').classList.add('hidden');
+});
+document.getElementById('btn-adjust-balance-cancel').addEventListener('click', () => {
+  document.getElementById('adjust-balance-modal').classList.add('hidden');
+});
+document.getElementById('btn-adjust-balance-confirm').addEventListener('click', async () => {
+  const amount = parseFloat(document.getElementById('adjust-balance-amount').value);
+  if (!amount || isNaN(amount)) return toast('Bitte einen gültigen Betrag eingeben.', 'error');
+  const note = document.getElementById('adjust-balance-note').value.trim() || null;
+  const { error } = await sb.rpc('admin_adjust_balance', {
+    p_user_id: _adjustBalanceUserId,
+    p_amount: amount,
+    p_note: note
+  });
+  document.getElementById('adjust-balance-modal').classList.add('hidden');
+  if (error) return toast(error.message, 'error');
+  toast(`Guthaben angepasst: ${amount >= 0 ? '+' : ''}${amount.toFixed(0)} ₡`, 'success');
+  loadAdminPanel();
+});
+document.getElementById('adjust-balance-modal').addEventListener('click', function(e) {
+  if (e.target === this) this.classList.add('hidden');
+});
 
 window.undoRejectMarket = async function(id, title) {
   const { error } = await sb.from('markets').update({ status: 'proposed' }).eq('id', id);
