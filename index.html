@@ -1879,8 +1879,8 @@ main {
       </div>
       <div id="form-login">
         <div class="form-group">
-          <label>E-Mail</label>
-          <input type="email" id="login-email" placeholder="user@schule.de">
+          <label>E-Mail oder Benutzername</label>
+          <input type="text" id="login-email" placeholder="user@schule.de oder benutzername" autocomplete="username">
         </div>
         <div class="form-group">
           <label>Passwort</label>
@@ -2231,12 +2231,23 @@ document.getElementById('btn-login').addEventListener('click', doLogin);
 document.getElementById('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 
 async function doLogin() {
-  const email    = document.getElementById('login-email').value.trim();
+  let identifier = document.getElementById('login-email').value.trim();
   const password = document.getElementById('login-password').value;
-  if (!email || !password) return toast('Bitte E-Mail und Passwort eingeben.', 'error');
+  if (!identifier || !password) return toast('Bitte E-Mail/Benutzername und Passwort eingeben.', 'error');
   const btn = document.getElementById('btn-login');
   btn.disabled = true; btn.textContent = '...';
-  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+
+  // Kein @ → Benutzername → E-Mail per RPC nachschlagen
+  if (!identifier.includes('@')) {
+    const { data: emailData, error: lookupErr } = await sb.rpc('get_email_by_username', { p_username: identifier });
+    if (lookupErr || !emailData) {
+      btn.disabled = false; btn.textContent = 'Login';
+      return toast('Benutzername nicht gefunden.', 'error');
+    }
+    identifier = emailData;
+  }
+
+  const { data, error } = await sb.auth.signInWithPassword({ email: identifier, password });
   btn.disabled = false; btn.textContent = 'Login';
   if (error) { toast('Login fehlgeschlagen: ' + error.message, 'error'); return; }
   currentUser = data.user;
